@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from eakf_diagnostics.extract import load_model_run, inspect_file_schema
 from eakf_diagnostics.checks import run_all_checks, Severity
 from eakf_diagnostics.agent import run_diagnostic_agent
-
+from dotenv import load_dotenv
+load_dotenv()
 
 def main():
     parser = argparse.ArgumentParser(description="Run EAKF ensemble process-health diagnostics.")
@@ -71,8 +72,16 @@ def main():
     print(f"\n{len(flagged)} issue(s) flagged. Invoking diagnostic agent...")
     run_id = run.run_path.stem
     report = run_diagnostic_agent(results, run_id=run_id, model_run=run)
-    print("\n--- Diagnostic report ---")
-    print(json.dumps(report, indent=2, default=str))
+
+    print("\n" + "="*70)
+    print(f"DIAGNOSTIC REPORT — {report.get('run_id', run_id)}")
+    print(f"Status: {report.get('status')}  |  Turns used: {report.get('turns_used', '?')}")
+    print("="*70)
+    if "report" in report:
+        print(report["report"])
+    else:
+        print(json.dumps(report, indent=2, default=str))
+    print("="*70)
 
 
 if __name__ == "__main__":

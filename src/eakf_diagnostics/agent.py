@@ -17,13 +17,10 @@ Flow:
      -- this is enforced via the system prompt and the required output
      schema, not just requested informally.
 
-STATUS: skeleton only. The `fetch_more_detail` tool currently returns a
-stub -- it needs to be wired to a live ModelRun object (from extract.py)
-once real .mat files are available to test against. Model string is
-verified (claude-sonnet-5, checked July 2026); max_tokens and
-prompt-caching cache_control blocks are still placeholders -- prompt
-caching wiring is a TODO once real check-result payloads (which get
-reused across a batch of runs) are available to cache against.
+STATUS: fully wired. fetch_more_detail returns real data from ModelRun
+(extract.py). Model string verified as claude-sonnet-5 (July 2026).
+Prompt caching not yet added -- planned once batch-run workflows are
+benchmarked for cache hit rate.
 """
 
 from __future__ import annotations
@@ -34,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import anthropic
+import numpy as np
 
 from .checks import CheckResult
 
