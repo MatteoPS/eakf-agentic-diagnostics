@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
+import pandas as pd
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -91,6 +92,7 @@ class ModelRun:
     prior_var_rec: np.ndarray       # (n_days, n_locations) pre-update ensemble variance
     post_var_rec: np.ndarray        # (n_days, n_locations) post-update ensemble variance
     all_file_name: str | None = None
+    statecodes: pd.DataFrame | None = None  # columns: ID (1-indexed), State, Country
     raw_field_names: list[str] = field(default_factory=list)  # for debugging/audit
 
     @property
@@ -104,6 +106,14 @@ class ModelRun:
     @property
     def n_params(self) -> int:
         return self.para_post.shape[2]
+
+    def location_name(self, idx_0: int) -> str:
+        """Human-readable label for a 0-indexed location. Falls back to
+        'location {idx_0}' if statecodes was not loaded."""
+        if self.statecodes is None:
+            return f"location {idx_0}"
+        row = self.statecodes.iloc[idx_0]
+        return f"{row['State']} ({row['Country']})"
 
     def _param_bounds(self, idx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """paramin/paramax sliced to the given param indices."""
@@ -122,24 +132,13 @@ class ModelRun:
 
     @property
     def alpha_trajectories(self) -> np.ndarray:
-        """
-        (n_days, n_ensemble, n_alpha_locations)
-
-        NOTE: shape/axis order changed from the original draft of this
-        module -- para_post's param axis is axis 2, not axis 0, so this
-        now indexes the LAST axis, not the first. checks.py's collapse/
-        clipping functions expect (n_locations, n_ensemble, n_days) and
-        will need a transpose when called on this -- see checks.py
-        calling convention notes.
-        """
-        idx = self.alpha_indices
-        return self.para_post[:, :, idx]
+        """(n_days, n_ensemble, n_alpha_locations)"""
+        return self.para_post[:, :, self.alpha_indices]
 
     @property
     def beta_trajectories(self) -> np.ndarray:
-        """(n_days, n_ensemble, n_beta_locations) -- see alpha_trajectories note."""
-        idx = self.beta_indices
-        return self.para_post[:, :, idx]
+        """(n_days, n_ensemble, n_beta_locations)"""
+        return self.para_post[:, :, self.beta_indices]
 
     @property
     def alpha_bounds(self) -> tuple[np.ndarray, np.ndarray]:
@@ -187,18 +186,15 @@ def _read_matlab_string(h5_obj, key: str) -> str | None:
         return None
 
 
-def load_model_run(path: str | Path) -> ModelRun:
+def load_model_run(path: str | Path, statecodes_path: str | Path | None = None) -> ModelRun:
     """
     Load a single Model_Runs/*.mat file (real-data run) into a ModelRun.
 
-    Raises:
-        FileNotFoundError: if path doesn't exist
-        ValueError: if the file looks like a synthetic run (has truth_*
-            fields) -- this loader is real-data-only by design; see module
-            docstring.
-        KeyError: if an expected field is missing (schema drift from what
-            model_forecast_run.m currently writes, or from what was
-            confirmed against the 601 reference file)
+    Args:
+        path: path to the .mat file
+        statecodes_path: optional path to statecodes.csv (columns: ID, State,
+            Country). If provided, ModelRun.location_name(idx) returns
+            human-readable labels. If omitted, falls back to 'location N'.
     """
     path = Path(path)
     if not path.exists():
@@ -234,6 +230,10 @@ def load_model_run(path: str | Path) -> ModelRun:
         post_var_rec = _read_dataset(f, "post_var_rec")
         all_file_name = _read_matlab_string(f, "all_file_name")
 
+        statecodes = None
+        if statecodes_path is not None:
+            statecodes = pd.read_csv(statecodes_path)
+
         run = ModelRun(
             run_path=path,
             para_post=para_post,
@@ -246,6 +246,7 @@ def load_model_run(path: str | Path) -> ModelRun:
             prior_var_rec=prior_var_rec,
             post_var_rec=post_var_rec,
             all_file_name=all_file_name,
+            statecodes=statecodes,
             raw_field_names=field_names,
         )
 

@@ -31,6 +31,9 @@ from eakf_diagnostics.agent import run_diagnostic_agent
 def main():
     parser = argparse.ArgumentParser(description="Run EAKF ensemble process-health diagnostics.")
     parser.add_argument("mat_path", help="Path to a Model_Runs/*.mat file")
+    parser.add_argument("--statecodes", default=None,
+                        help="Path to statecodes.csv (columns: ID, State, Country). "
+                             "Enables human-readable location names in agent reports.")
     parser.add_argument("--coverage", type=float, default=None,
                          help="Observed forecast coverage, if known (from Forecasts/ metrics)")
     parser.add_argument("--inspect-only", action="store_true",
@@ -46,7 +49,7 @@ def main():
         print(json.dumps(schema, indent=2, default=str))
         return
 
-    run = load_model_run(mat_path)
+    run = load_model_run(mat_path, statecodes_path=args.statecodes)
     print(f"Loaded run: {run.run_path.name}")
     print(f"  n_days={run.n_days}  n_ensemble={run.n_ensemble}  n_params={run.n_params}")
 
@@ -67,7 +70,7 @@ def main():
 
     print(f"\n{len(flagged)} issue(s) flagged. Invoking diagnostic agent...")
     run_id = run.run_path.stem
-    report = run_diagnostic_agent(results, run_id=run_id)
+    report = run_diagnostic_agent(results, run_id=run_id, model_run=run)
     print("\n--- Diagnostic report ---")
     print(json.dumps(report, indent=2, default=str))
 

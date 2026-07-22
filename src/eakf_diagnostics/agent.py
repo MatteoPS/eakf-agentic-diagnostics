@@ -89,7 +89,8 @@ TOOLS = [
                         "beta_trajectory_full",
                         "alpha_trajectory_full",
                         "per_location_collapse_ratios",
-                        "per_location_clipping_fractions",
+                        "per_location_kalman_ratios",
+                        "kalman_ratio_timeseries",
                         "coverage_by_forecast_week",
                     ],
                     "description": "Which additional detail to fetch.",
@@ -107,43 +108,154 @@ TOOLS = [
 
 @dataclass
 class RunContext:
-    """
-    Everything the tool executor needs to actually answer fetch_more_detail
-    calls for a given run. STUB: currently holds nothing real. Once
-    extract.py can load real files, this should wrap a ModelRun instance
-    (or the relevant precomputed arrays) so execute_tool_call can slice
-    into real data instead of returning a placeholder.
-    """
+    """Everything the tool executor needs to answer fetch_more_detail calls."""
     run_id: str
-    # model_run: ModelRun  # TODO: wire once real data available
+    model_run: object  # ModelRun instance from extract.py
 
 
 def execute_tool_call(tool_name: str, tool_input: dict, context: RunContext) -> str:
     """
-    Executes a tool call and returns the result as a string (JSON-encoded
-    for structured data). STUB implementation -- wire to real ModelRun
-    data once extract.py is validated against actual Model_Runs/*.mat files.
+    Executes a tool call against real ModelRun data and returns JSON.
+    All heavy numpy work happens here so the agent gets clean structured
+    numbers, not raw arrays.
     """
-    if tool_name == "fetch_more_detail":
-        field = tool_input.get("field")
-        # STUB: real implementation should index into context.model_run
-        return json.dumps({
-            "status": "stub",
-            "note": (
-                f"fetch_more_detail(field='{field}') not yet wired to real data. "
-                f"This is a placeholder response for pipeline development before "
-                f"real Model_Runs/*.mat files are available."
-            ),
-            "run_id": context.run_id,
-        })
+    if tool_name != "fetch_more_detail":
+        return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
-    return json.dumps({"error": f"Unknown tool: {tool_name}"})
+    run = context.model_run
+    field = tool_input.get("field")
+    loc_idx = tool_input.get("location_idx")  # optional, 0-indexed
+
+    try:
+        if field == "beta_trajectory_full":
+            traj = run.beta_trajectories  # (n_days, n_ensemble, n_locations)
+            if loc_idx is not None:
+                t = traj[:, :, loc_idx]
+                return json.dumps({
+                    "field": field,
+                    "location": run.location_name(loc_idx),
+                    "location_idx": loc_idx,
+                    "n_days": int(t.shape[0]),
+                    "ensemble_mean_by_day": t.mean(axis=1).tolist(),
+                    "ensemble_std_by_day":  t.std(axis=1).tolist(),
+                    "early_mean": float(t[:10].mean()),
+                    "late_mean":  float(t[-10:].mean()),
+                })
+            # All locations summary
+            means = traj.mean(axis=1)  # (n_days, n_locations)
+            return json.dumps({
+                "field": field,
+                "per_location_early_mean": means[:10].mean(axis=0).tolist(),
+                "per_location_late_mean":  means[-10:].mean(axis=0).tolist(),
+            })
+
+        elif field == "alpha_trajectory_full":
+            traj = run.alpha_trajectories
+            if loc_idx is not None:
+                t = traj[:, :, loc_idx]
+                return json.dumps({
+                    "field": field,
+                    "location": run.location_name(loc_idx),
+                    "location_idx": loc_idx,
+                    "ensemble_mean_by_day": t.mean(axis=1).tolist(),
+                    "ensemble_std_by_day":  t.std(axis=1).tolist(),
+                })
+            means = traj.mean(axis=1)
+            return json.dumps({
+                "field": field,
+                "per_location_early_mean": means[:10].mean(axis=0).tolist(),
+                "per_location_late_mean":  means[-10:].mean(axis=0).tolist(),
+            })
+
+        elif field == "per_location_collapse_ratios":
+            # Recompute collapse ratios for all locations, with names
+            burn = 5
+            for param, traj in [("alpha", run.alpha_trajectories),
+                                 ("beta",  run.beta_trajectories)]:
+                std = traj.std(axis=1)  # (n_days, n_locations)
+                early = std[burn:burn + 5].mean(axis=0)
+                late  = std[-5:].mean(axis=0)
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    ratio = np.where(early > 1e-10, late / early, np.nan)
+            # Return both alpha and beta
+            alpha_std = run.alpha_trajectories.std(axis=1)
+            beta_std  = run.beta_trajectories.std(axis=1)
+            alpha_ratio = np.where(
+                alpha_std[burn:burn+5].mean(axis=0) > 1e-10,
+                alpha_std[-5:].mean(axis=0) / alpha_std[burn:burn+5].mean(axis=0),
+                np.nan)
+            beta_ratio = np.where(
+                beta_std[burn:burn+5].mean(axis=0) > 1e-10,
+                beta_std[-5:].mean(axis=0) / beta_std[burn:burn+5].mean(axis=0),
+                np.nan)
+            records = []
+            for i in range(run.alpha_trajectories.shape[2]):
+                records.append({
+                    "location_idx": i,
+                    "location": run.location_name(i),
+                    "alpha_collapse_ratio": float(alpha_ratio[i]) if not np.isnan(alpha_ratio[i]) else None,
+                    "beta_collapse_ratio":  float(beta_ratio[i])  if not np.isnan(beta_ratio[i])  else None,
+                })
+            return json.dumps({"field": field, "locations": records})
+
+        elif field == "per_location_kalman_ratios":
+            prior = run.prior_var_rec
+            post  = run.post_var_rec
+            valid = prior > 1e-12
+            with np.errstate(invalid="ignore", divide="ignore"):
+                ratio = np.where(valid, post / prior, np.nan)
+            mean_per_loc = np.nanmean(ratio, axis=0)
+            frac_valid   = valid.mean(axis=0)
+            records = []
+            for i in range(len(mean_per_loc)):
+                records.append({
+                    "location_idx": i,
+                    "location": run.location_name(i),
+                    "mean_post_prior_ratio": float(mean_per_loc[i]) if not np.isnan(mean_per_loc[i]) else None,
+                    "frac_valid_days": float(frac_valid[i]),
+                })
+            return json.dumps({"field": field, "overall_mean": float(np.nanmean(mean_per_loc)),
+                               "locations": records})
+
+        elif field == "kalman_ratio_timeseries":
+            # Day-by-day post/prior ratio for a specific location
+            if loc_idx is None:
+                return json.dumps({"error": "kalman_ratio_timeseries requires location_idx"})
+            prior = run.prior_var_rec[:, loc_idx]
+            post  = run.post_var_rec[:, loc_idx]
+            valid = prior > 1e-12
+            with np.errstate(invalid="ignore", divide="ignore"):
+                ratio = np.where(valid, post / prior, None)
+            return json.dumps({
+                "field": field,
+                "location": run.location_name(loc_idx),
+                "location_idx": loc_idx,
+                "ratio_by_day": [float(r) if r is not None and not np.isnan(r) else None
+                                 for r in ratio],
+                "frac_valid_days": float(valid.mean()),
+                "mean_ratio_valid_days": float(np.nanmean(
+                    np.where(valid, post/prior, np.nan))),
+            })
+
+        elif field == "coverage_by_forecast_week":
+            return json.dumps({
+                "status": "not_available",
+                "note": "Coverage data requires Forecasts/ files, not yet wired. "
+                        "Use --coverage flag to pass empirical coverage manually."
+            })
+
+        else:
+            return json.dumps({"error": f"Unknown field: {field}"})
+
+    except Exception as e:
+        return json.dumps({"error": str(e), "field": field})
 
 
 def run_diagnostic_agent(
     check_results: list[CheckResult],
     run_id: str,
-    max_turns: int = 6,
+    model_run=None,
+    max_turns: int = 8,
     client: anthropic.Anthropic | None = None,
 ) -> dict:
     """
@@ -151,19 +263,23 @@ def run_diagnostic_agent(
     optionally call fetch_more_detail to investigate, and returns the
     final structured diagnostic response.
 
-    Only call this for runs where at least one check returned WARN/FAIL --
-    don't waste API calls (and money, see project spending cap) on clean
-    runs with nothing to investigate. Caller (main pipeline script) is
-    responsible for that gating.
+    Args:
+        check_results: list of CheckResult from checks.run_all_checks()
+        run_id: string identifier for the run (used in the report)
+        model_run: ModelRun instance from extract.load_model_run(); if
+            provided, fetch_more_detail returns real data. If None, the
+            tool returns an error message (agent can still reason from
+            the check summary alone).
+        max_turns: maximum tool-use rounds before giving up
     """
     if client is None:
-        client = anthropic.Anthropic()  # picks up ANTHROPIC_API_KEY from env
+        client = anthropic.Anthropic()
 
     flagged = [r for r in check_results if r.severity.value != "ok"]
     if not flagged:
         return {"status": "no_issues_flagged", "run_id": run_id}
 
-    context = RunContext(run_id=run_id)
+    context = RunContext(run_id=run_id, model_run=model_run)
 
     check_summary = "\n".join(
         f"- [{r.severity.value.upper()}] {r.check_name}: {r.summary}\n"
