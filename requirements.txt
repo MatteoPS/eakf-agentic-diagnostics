@@ -1,0 +1,3 @@
+h5py>=3.10
+numpy>=1.26
+anthropic>=0.40
