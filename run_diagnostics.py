@@ -5,13 +5,13 @@ run_diagnostics.py
 Entry point: point this at a Model_Runs/*.mat file, it runs deterministic
 checks, and only calls the LLM agent if something was flagged.
 
-STATUS: end-to-end skeleton. extract.load_model_run() has not yet been
-tested against a real file (none available at time of writing -- user is
-re-running real-data runs 601-604). Do not trust this script's output
-until that validation happens; see project build order step 1/2.
+STATUS: extraction schema confirmed against a real file (601). Check
+thresholds are still placeholders pending calibration against a known-good
+/ known-bad pair (build order step 1). Agent tool-wiring (fetch_more_detail)
+still stubbed.
 
 Usage:
-    python run_diagnostics.py path/to/Model_Runs/some_run.mat --beta-bounds 0 5 --alpha-bounds 0 0.6
+    python run_diagnostics.py path/to/Model_Runs/some_run.mat
 """
 
 from __future__ import annotations
@@ -31,10 +31,6 @@ from eakf_diagnostics.agent import run_diagnostic_agent
 def main():
     parser = argparse.ArgumentParser(description="Run EAKF ensemble process-health diagnostics.")
     parser.add_argument("mat_path", help="Path to a Model_Runs/*.mat file")
-    parser.add_argument("--beta-bounds", nargs=2, type=float, default=[0.0, 5.0],
-                         help="paramin/paramax for beta (from parafit_vars.mat)")
-    parser.add_argument("--alpha-bounds", nargs=2, type=float, default=[0.0, 0.6],
-                         help="paramin/paramax for alpha")
     parser.add_argument("--coverage", type=float, default=None,
                          help="Observed forecast coverage, if known (from Forecasts/ metrics)")
     parser.add_argument("--inspect-only", action="store_true",
@@ -52,15 +48,9 @@ def main():
 
     run = load_model_run(mat_path)
     print(f"Loaded run: {run.run_path.name}")
-    print(f"  n_ensemble={run.n_ensemble}  n_days={run.n_days}")
+    print(f"  n_days={run.n_days}  n_ensemble={run.n_ensemble}  n_params={run.n_params}")
 
-    results = run_all_checks(
-        beta_trajectories=run.beta_trajectories,
-        alpha_trajectories=run.alpha_trajectories,
-        beta_bounds=tuple(args.beta_bounds),
-        alpha_bounds=tuple(args.alpha_bounds),
-        coverage_observed=args.coverage,
-    )
+    results = run_all_checks(run, coverage_observed=args.coverage)
 
     print("\n--- Deterministic check results ---")
     for r in results:
