@@ -3,21 +3,28 @@ checks.py
 
 Deterministic, non-LLM checks for EAKF ensemble PROCESS health.
 
-Scope reminder (see project memory): these checks answer "did the
-estimation process behave correctly?" -- NOT "did the model get the right
-answer?". They run on real-data runs (no ground truth needed) and operate
-on ensemble internals: parameter trajectories and, where available,
-forecast coverage stats.
+Scope reminder: these checks answer "did the estimation process behave
+correctly?" — NOT "did the model get the right answer?". They run on
+real-data runs (no ground truth needed) and operate on ensemble internals.
 
-Three checks, each returns a CheckResult (not a bare bool) because the
-LLM agent downstream needs the actual numbers, not just a verdict, to
-reason about severity and possible causes.
+DESIGN HISTORY (see README Known limitations):
+    An initial parameter-bound clipping check was designed and built, but
+    found to be structurally uninformative for this pipeline: checkbound_para.m
+    resamples out-of-bound ensemble members to interior values rather than
+    clipping them to the boundary, so the fraction of values exactly at a
+    bound is always 0.0% by construction. The check was replaced with
+    check_kalman_update_activity(), which uses prior_var_rec / post_var_rec
+    fields already saved to the .mat file — no MATLAB code changes required.
 
-THRESHOLDS ARE PLACEHOLDERS. They're set to plausible-sounding defaults
-so the logic is exercisable now, on dummy data. Once real Model_Runs/
-files are available, these need to be calibrated against the known-good
-and known-bad reference runs (per project build order step 1) -- do not
-trust these numbers for real diagnosis until that calibration happens.
+Three checks, each returns a CheckResult rather than a bare bool, because the
+LLM agent downstream needs actual numbers, not just a verdict, to reason about
+severity and alternative explanations.
+
+THRESHOLDS ARE PARTIALLY CALIBRATED. Collapse thresholds are informed by
+empirical spread ratios observed across 8 real-data runs (601-604 Poisson,
+701-704 deterministic dev) — range 10-26%. Kalman activity thresholds are
+still placeholders pending inspection of real prior_var_rec/post_var_rec
+values. See calibration notes per function.
 """
 
 from __future__ import annotations
@@ -42,84 +49,87 @@ class CheckResult:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Check 1: Ensemble variance collapse
+# Check 1: Ensemble spread collapse
 # ─────────────────────────────────────────────────────────────────────────
 
-def check_ensemble_collapse(
+def check_ensemble_spread_collapse(
     param_trajectories: np.ndarray,
-    warn_ratio: float = 0.1,
-    fail_ratio: float = 0.02,
+    param_label: str = "param",
+    warn_ratio: float = 0.10,
+    fail_ratio: float = 0.05,
     burn_in_days: int = 5,
 ) -> CheckResult:
     """
-    Flags premature collapse of ensemble spread -- the EAKF becoming
+    Flags premature collapse of ensemble spread — the EAKF becoming
     overconfident, where members converge to near-identical values and
     stop representing uncertainty.
 
     Args:
-        param_trajectories: (n_days, n_ensemble, n_locations) array -- this
-            is the axis order ModelRun.alpha_trajectories/.beta_trajectories
-            actually produce (confirmed against real 601 file: para_post's
-            axes are day/ensemble/param, not param/ensemble/day as first
-            assumed before any real data was available).
-        warn_ratio: if late-run ensemble std / early-run ensemble std
-            drops below this, flag WARN.
+        param_trajectories: (n_days, n_ensemble, n_locations) — confirmed
+            axis order from real 601 file (para_post: day/ensemble/param,
+            sliced to alpha or beta locations via alphamaps/betamap).
+        param_label: "alpha" or "beta", used in check_name for disambiguation.
+        warn_ratio: if (late std / early std) < this, flag WARN.
         fail_ratio: same, but for FAIL.
-        burn_in_days: days to skip at the start (initial spread is often
-            wide by design; not meaningful to compare against day 0).
+        burn_in_days: days to skip at start (initial spread is wide by
+            design; comparing against day 0 is not meaningful).
 
-    PLACEHOLDER: warn_ratio/fail_ratio still need calibration against real
-    known-good/known-bad runs -- see module docstring. Axis order itself
-    IS now confirmed, just not the thresholds.
+    CALIBRATION: warn_ratio=0.10 is informed by real data — the lowest
+    collapse ratio observed across 8 runs was 10.6% (run 701, alpha).
+    fail_ratio=0.05 is a threshold below any observed run, set to catch
+    severe outliers not yet seen. These should be revisited if more runs
+    are added to the reference set.
     """
     n_days, n_ensemble, n_locations = param_trajectories.shape
+    check_name = f"ensemble_spread_collapse_{param_label}"
+
     if n_days <= burn_in_days:
         return CheckResult(
-            "ensemble_collapse", Severity.WARN,
-            f"Run too short ({n_days} days) to evaluate collapse with "
-            f"burn_in_days={burn_in_days}.",
+            check_name, Severity.WARN,
+            f"Run too short ({n_days} days) to evaluate collapse "
+            f"(burn_in_days={burn_in_days}).",
             {"n_days": n_days},
         )
 
     std_over_time = param_trajectories.std(axis=1)  # (n_days, n_locations)
     early_std = std_over_time[burn_in_days:burn_in_days + 5, :].mean(axis=0)
-    late_std = std_over_time[-5:, :].mean(axis=0)
+    late_std  = std_over_time[-5:, :].mean(axis=0)
 
-    # avoid divide-by-zero for locations with zero early spread
     ratio = np.divide(
         late_std, early_std,
         out=np.full_like(early_std, np.nan),
         where=early_std > 1e-10,
     )
 
-    worst_idx = np.nanargmin(ratio) if not np.all(np.isnan(ratio)) else None
-    worst_ratio = ratio[worst_idx] if worst_idx is not None else None
+    worst_idx   = int(np.nanargmin(ratio)) if not np.all(np.isnan(ratio)) else None
+    worst_ratio = float(ratio[worst_idx])  if worst_idx is not None else None
 
     if worst_ratio is None:
-        severity = Severity.WARN
+        sev     = Severity.WARN
         summary = "Could not compute collapse ratio (all early-std ~0)."
     elif worst_ratio < fail_ratio:
-        severity = Severity.FAIL
+        sev     = Severity.FAIL
         summary = (
-            f"Severe ensemble collapse: location {worst_idx} spread shrank "
-            f"to {worst_ratio:.1%} of early-run spread."
+            f"Severe {param_label} spread collapse: location {worst_idx} "
+            f"shrank to {worst_ratio:.1%} of early-run spread."
         )
     elif worst_ratio < warn_ratio:
-        severity = Severity.WARN
+        sev     = Severity.WARN
         summary = (
-            f"Possible ensemble collapse: location {worst_idx} spread shrank "
-            f"to {worst_ratio:.1%} of early-run spread."
+            f"Possible {param_label} spread collapse: location {worst_idx} "
+            f"shrank to {worst_ratio:.1%} of early-run spread."
         )
     else:
-        severity = Severity.OK
-        summary = f"No collapse detected (min ratio {worst_ratio:.1%})."
+        sev     = Severity.OK
+        summary = f"No {param_label} spread collapse (min ratio {worst_ratio:.1%})."
 
     return CheckResult(
-        "ensemble_collapse", severity, summary,
+        check_name, sev, summary,
         {
+            "param_label": param_label,
             "ratio_per_location": ratio.tolist(),
-            "worst_location_idx": int(worst_idx) if worst_idx is not None else None,
-            "worst_ratio": float(worst_ratio) if worst_ratio is not None else None,
+            "worst_location_idx": worst_idx,
+            "worst_ratio": worst_ratio,
             "warn_ratio": warn_ratio,
             "fail_ratio": fail_ratio,
         },
@@ -127,68 +137,140 @@ def check_ensemble_collapse(
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Check 2: Parameter bound clipping
+# Check 2: Kalman update activity (replaces clipping check)
 # ─────────────────────────────────────────────────────────────────────────
 
-def check_parameter_clipping(
-    param_trajectories: np.ndarray,
-    param_min: np.ndarray | float,
-    param_max: np.ndarray | float,
-    warn_frac: float = 0.10,
-    fail_frac: float = 0.30,
-    tol: float = 1e-6,
+def check_kalman_update_activity(
+    prior_var_rec: np.ndarray,
+    post_var_rec: np.ndarray,
+    over_aggressive_threshold: float = 0.05,
+    under_updating_threshold: float  = 0.98,
+    location_outlier_z: float        = 3.0,
 ) -> CheckResult:
     """
-    Flags parameters that spend a large fraction of the run pinned at
-    their bounds (paramin/paramax) instead of settling to an interior
-    value -- suggests the bounds are misspecified or the model is being
-    forced to compensate for something else.
+    Checks whether the EAKF is updating the ensemble by a healthy amount
+    at each assimilation step, using the ratio post_var / prior_var recorded
+    per day per location.
+
+    WHY THIS REPLACES CLIPPING: checkbound_para.m resamples out-of-bound
+    ensemble members to interior values (not clips to boundary), making
+    fraction-at-exact-bound always 0 by construction. This check instead
+    measures how aggressively the filter reduces variance per step — a
+    mechanistically more informative signal that requires no MATLAB changes.
+
+    Two failure modes:
+      OVER-AGGRESSIVE (ratio << 1): filter collapses variance too fast at
+          each step; ensemble loses diversity early, forecast uncertainty
+          understated. Complements the spread-collapse check, but operates
+          per-step rather than across the whole run.
+      UNDER-UPDATING (ratio near 1): filter barely responds to observations;
+          ensemble not being informed by data.
+
+    Also flags per-location outliers: a single location whose mean ratio
+    deviates strongly from the others suggests a location-specific problem
+    (bad observations, unusual epidemic dynamics, boundary condition issue).
 
     Args:
-        param_trajectories: (n_days, n_ensemble, n_locations) -- see
-            check_ensemble_collapse docstring for axis order confirmation.
-        param_min, param_max: bounds for this parameter. Real paramin/
-            paramax fields are PER-PARAMETER arrays (shape (1, 196) in the
-            confirmed 601 file), not single shared scalars -- pass either
-            a scalar (broadcasts to all locations) or a 1D array of length
-            n_locations matching param_trajectories' last axis (i.e.
-            ModelRun.alpha_bounds / .beta_bounds, already sliced to the
-            right params via alphamaps/betamap).
-        warn_frac / fail_frac: fraction of (day, ensemble-member, location)
-            points sitting within `tol` of a bound, above which to flag.
+        prior_var_rec: (n_days, n_locations) ensemble variance before update
+        post_var_rec:  (n_days, n_locations) ensemble variance after update
+        over_aggressive_threshold: mean ratio below this → WARN/FAIL
+        under_updating_threshold:  mean ratio above this → WARN
+        location_outlier_z: z-score above this → flag that location
 
-    PLACEHOLDER: warn_frac/fail_frac still need calibration against real
-    known-good/known-bad runs.
+    CALIBRATION: thresholds are PLACEHOLDERS — prior_var_rec/post_var_rec
+    values have not yet been inspected across the reference run set (601-604,
+    701-704). These need to be replaced with empirically informed values once
+    check output on real data is reviewed.
     """
-    param_min = np.asarray(param_min)
-    param_max = np.asarray(param_max)
-    # broadcast (n_locations,) bounds against (n_days, n_ensemble, n_locations)
-    at_min = np.abs(param_trajectories - param_min) < tol
-    at_max = np.abs(param_trajectories - param_max) < tol
-    at_bound = at_min | at_max
+    # Mask days where prior variance is zero (no assimilation / no observation
+    # at that location — these are valid and should not be counted as failures)
+    valid = prior_var_rec > 1e-12
+    ratio = np.where(
+        valid,
+        np.divide(post_var_rec, prior_var_rec,
+                  out=np.ones_like(prior_var_rec),
+                  where=valid),
+        np.nan,
+    )
 
-    frac_clipped = at_bound.mean()
-    frac_at_min = at_min.mean()
-    frac_at_max = at_max.mean()
+    frac_valid = valid.mean()
+    if frac_valid < 0.1:
+        return CheckResult(
+            "kalman_update_activity", Severity.WARN,
+            f"Only {frac_valid:.1%} of days have non-zero prior variance; "
+            f"cannot meaningfully assess Kalman update activity.",
+            {"frac_valid_days": float(frac_valid)},
+        )
 
-    if frac_clipped >= fail_frac:
-        severity = Severity.FAIL
-        summary = f"Heavy bound-clipping: {frac_clipped:.1%} of ensemble-days at a bound."
-    elif frac_clipped >= warn_frac:
-        severity = Severity.WARN
-        summary = f"Some bound-clipping: {frac_clipped:.1%} of ensemble-days at a bound."
+    # Per-location mean ratio (ignoring NaN days)
+    mean_ratio_per_loc = np.nanmean(ratio, axis=0)   # (n_locations,)
+    overall_mean       = float(np.nanmean(ratio))
+
+    # Per-location outlier detection
+    loc_mean  = float(np.nanmean(mean_ratio_per_loc))
+    loc_std   = float(np.nanstd(mean_ratio_per_loc))
+    # Only flag a location as an outlier if it both:
+    #   (a) exceeds location_outlier_z standard deviations from the mean, AND
+    #   (b) deviates by at least 0.05 in absolute terms from the population mean.
+    # Guard (b) prevents spurious flags when all locations are nearly identical
+    # (tiny loc_std inflates z-scores even for trivially small differences).
+    if loc_std > 1e-10:
+        zscores = (mean_ratio_per_loc - loc_mean) / loc_std
+        abs_dev = np.abs(mean_ratio_per_loc - loc_mean)
+        outlier_locs = np.where(
+            (np.abs(zscores) > location_outlier_z) & (abs_dev > 0.05)
+        )[0].tolist()
     else:
-        severity = Severity.OK
-        summary = f"No significant clipping ({frac_clipped:.1%} of ensemble-days at a bound)."
+        outlier_locs = []
+
+    findings = []
+    severity = Severity.OK
+
+    if overall_mean < over_aggressive_threshold:
+        severity = Severity.FAIL
+        findings.append(
+            f"Over-aggressive updating: mean post/prior variance ratio "
+            f"{overall_mean:.3f} (threshold {over_aggressive_threshold})."
+        )
+    elif overall_mean < over_aggressive_threshold * 2:
+        severity = Severity.WARN
+        findings.append(
+            f"Possibly over-aggressive updating: mean ratio {overall_mean:.3f}."
+        )
+
+    if overall_mean > under_updating_threshold:
+        severity = max(severity, Severity.WARN,
+                       key=lambda s: ["ok", "warn", "fail"].index(s.value))
+        findings.append(
+            f"Under-updating: mean post/prior variance ratio "
+            f"{overall_mean:.3f} (threshold {under_updating_threshold}). "
+            f"Filter may not be responding to observations."
+        )
+
+    if outlier_locs:
+        severity = max(severity, Severity.WARN,
+                       key=lambda s: ["ok", "warn", "fail"].index(s.value))
+        findings.append(
+            f"Location-specific outlier(s) in update activity: "
+            f"locations {outlier_locs} deviate >{location_outlier_z:.1f} SD "
+            f"from the location mean ratio."
+        )
+
+    if not findings:
+        summary = f"Kalman update activity normal (mean ratio {overall_mean:.3f})."
+    else:
+        summary = " | ".join(findings)
 
     return CheckResult(
-        "parameter_clipping", severity, summary,
+        "kalman_update_activity", severity, summary,
         {
-            "frac_clipped": float(frac_clipped),
-            "frac_at_min": float(frac_at_min),
-            "frac_at_max": float(frac_at_max),
-            "warn_frac": warn_frac,
-            "fail_frac": fail_frac,
+            "overall_mean_ratio": overall_mean,
+            "mean_ratio_per_location": mean_ratio_per_loc.tolist(),
+            "outlier_locations": outlier_locs,
+            "frac_valid_days": float(frac_valid),
+            "over_aggressive_threshold": over_aggressive_threshold,
+            "under_updating_threshold":  under_updating_threshold,
+            "location_outlier_z": location_outlier_z,
         },
     )
 
@@ -204,70 +286,72 @@ def check_coverage_miscalibration(
     fail_delta: float = 0.20,
 ) -> CheckResult:
     """
-    Flags miscalibrated forecast uncertainty: if the nominal_coverage
-    (e.g. 95%) prediction interval doesn't actually contain truth close
-    to that fraction of the time, the ensemble's stated uncertainty is
-    untrustworthy (either over- or under-confident).
+    Flags miscalibrated forecast uncertainty: if the 95% PI doesn't
+    actually contain truth ~95% of the time, the ensemble's stated
+    uncertainty is untrustworthy.
 
     Args:
-        coverage_observed: empirical coverage rate, e.g. from
-            Forecasts/*_fore_res_group.mat coverage field, already
-            computed by make_forecast_metrics_real.m -- this check does
-            NOT recompute it, just evaluates it.
-        nominal_coverage: the target coverage (0.95 for a 95% PI)
-        warn_delta / fail_delta: |observed - nominal| threshold
+        coverage_observed: empirical coverage from Forecasts/ metrics
+            (already computed by make_forecast_metrics_real.m — this check
+            does NOT recompute it, just evaluates it).
+        nominal_coverage: target coverage level (0.95 for 95% PI).
+        warn_delta / fail_delta: |observed - nominal| thresholds.
 
-    PLACEHOLDER: warn_delta/fail_delta need calibration against real runs.
+    CALIBRATION: thresholds are placeholders — no Forecasts/ data has been
+    loaded yet to inform empirical values.
     """
-    delta = abs(coverage_observed - nominal_coverage)
-    direction = "over-confident (too narrow)" if coverage_observed < nominal_coverage \
-        else "under-confident (too wide)"
+    delta     = abs(coverage_observed - nominal_coverage)
+    direction = (
+        "over-confident (PI too narrow)"
+        if coverage_observed < nominal_coverage
+        else "under-confident (PI too wide)"
+    )
 
     if delta >= fail_delta:
-        severity = Severity.FAIL
+        sev     = Severity.FAIL
         summary = (
-            f"Severe miscalibration: {direction}. Observed coverage "
-            f"{coverage_observed:.1%} vs nominal {nominal_coverage:.1%}."
+            f"Severe miscalibration: {direction}. "
+            f"Observed {coverage_observed:.1%} vs nominal {nominal_coverage:.1%}."
         )
     elif delta >= warn_delta:
-        severity = Severity.WARN
+        sev     = Severity.WARN
         summary = (
-            f"Possible miscalibration: {direction}. Observed coverage "
-            f"{coverage_observed:.1%} vs nominal {nominal_coverage:.1%}."
+            f"Possible miscalibration: {direction}. "
+            f"Observed {coverage_observed:.1%} vs nominal {nominal_coverage:.1%}."
         )
     else:
-        severity = Severity.OK
-        summary = f"Coverage well-calibrated ({coverage_observed:.1%} vs nominal {nominal_coverage:.1%})."
+        sev     = Severity.OK
+        summary = (
+            f"Coverage well-calibrated "
+            f"({coverage_observed:.1%} vs nominal {nominal_coverage:.1%})."
+        )
 
     return CheckResult(
-        "coverage_miscalibration", severity, summary,
+        "coverage_miscalibration", sev, summary,
         {
             "coverage_observed": coverage_observed,
-            "nominal_coverage": nominal_coverage,
-            "delta": delta,
-            "warn_delta": warn_delta,
-            "fail_delta": fail_delta,
+            "nominal_coverage":  nominal_coverage,
+            "delta":             delta,
+            "warn_delta":        warn_delta,
+            "fail_delta":        fail_delta,
         },
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Convenience wrapper
+# ─────────────────────────────────────────────────────────────────────────
+
 def run_all_checks(model_run, coverage_observed: float | None = None) -> list[CheckResult]:
     """
-    Convenience wrapper: run all checks against a loaded ModelRun and
-    return results as a list.
-
-    Args:
-        model_run: an eakf_diagnostics.extract.ModelRun instance.
-        coverage_observed: optional, from Forecasts/ metrics.
+    Run all checks against a loaded ModelRun and return results as a list.
+    Coverage check only runs if coverage_observed is provided (requires
+    Forecasts/ data, not just Model_Runs/).
     """
-    alpha_min, alpha_max = model_run.alpha_bounds
-    beta_min, beta_max = model_run.beta_bounds
-
     results = [
-        check_ensemble_collapse(model_run.alpha_trajectories),
-        check_ensemble_collapse(model_run.beta_trajectories),
-        check_parameter_clipping(model_run.alpha_trajectories, alpha_min, alpha_max),
-        check_parameter_clipping(model_run.beta_trajectories, beta_min, beta_max),
+        check_ensemble_spread_collapse(model_run.alpha_trajectories, param_label="alpha"),
+        check_ensemble_spread_collapse(model_run.beta_trajectories,  param_label="beta"),
+        check_kalman_update_activity(model_run.prior_var_rec, model_run.post_var_rec),
     ]
     if coverage_observed is not None:
         results.append(check_coverage_miscalibration(coverage_observed))

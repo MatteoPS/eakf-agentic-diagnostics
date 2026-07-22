@@ -1,8 +1,8 @@
 from .extract import load_model_run, inspect_file_schema, ModelRun
 from .checks import (
     run_all_checks,
-    check_ensemble_collapse,
-    check_parameter_clipping,
+    check_ensemble_spread_collapse,
+    check_kalman_update_activity,
     check_coverage_miscalibration,
     CheckResult,
     Severity,
@@ -14,8 +14,8 @@ __all__ = [
     "inspect_file_schema",
     "ModelRun",
     "run_all_checks",
-    "check_ensemble_collapse",
-    "check_parameter_clipping",
+    "check_ensemble_spread_collapse",
+    "check_kalman_update_activity",
     "check_coverage_miscalibration",
     "CheckResult",
     "Severity",

@@ -62,6 +62,8 @@ EXPECTED_FIELDS = [
     "S_post",                # (n_ensemble, n_days, n_locations) susceptible compartment, posterior
     "paramin",                # (1, n_params) lower bound per parameter
     "paramax",                # (1, n_params) upper bound per parameter
+    "prior_var_rec",        # (n_days, n_locations) ensemble variance BEFORE each EAKF update
+    "post_var_rec",          # (n_days, n_locations) ensemble variance AFTER each EAKF update
     "all_file_name",        # run identifier / filename metadata (HDF5 object ref)
 ]
 
@@ -86,6 +88,8 @@ class ModelRun:
     S_post: np.ndarray               # (n_ensemble, n_days, n_locations)
     paramin: np.ndarray
     paramax: np.ndarray
+    prior_var_rec: np.ndarray       # (n_days, n_locations) pre-update ensemble variance
+    post_var_rec: np.ndarray        # (n_days, n_locations) post-update ensemble variance
     all_file_name: str | None = None
     raw_field_names: list[str] = field(default_factory=list)  # for debugging/audit
 
@@ -226,6 +230,8 @@ def load_model_run(path: str | Path) -> ModelRun:
         S_post = _read_dataset(f, "S_post")
         paramin = _read_dataset(f, "paramin")
         paramax = _read_dataset(f, "paramax")
+        prior_var_rec = _read_dataset(f, "prior_var_rec")
+        post_var_rec = _read_dataset(f, "post_var_rec")
         all_file_name = _read_matlab_string(f, "all_file_name")
 
         run = ModelRun(
@@ -237,6 +243,8 @@ def load_model_run(path: str | Path) -> ModelRun:
             S_post=S_post,
             paramin=paramin,
             paramax=paramax,
+            prior_var_rec=prior_var_rec,
+            post_var_rec=post_var_rec,
             all_file_name=all_file_name,
             raw_field_names=field_names,
         )
