@@ -5,11 +5,6 @@ run_diagnostics.py
 Entry point: point this at a Model_Runs/*.mat file, it runs deterministic
 checks, and only calls the LLM agent if something was flagged.
 
-STATUS: extraction schema confirmed against a real file (601). Check
-thresholds are still placeholders pending calibration against a known-good
-/ known-bad pair (build order step 1). Agent tool-wiring (fetch_more_detail)
-still stubbed.
-
 Usage:
     python run_diagnostics.py path/to/Model_Runs/some_run.mat
 """
