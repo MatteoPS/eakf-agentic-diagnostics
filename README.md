@@ -1,6 +1,6 @@
 # eakf-agentic-diagnostics
 
-A Claude-powered diagnostic agent for [`NA_SEIR-EAKF_forecast`](https://github.com/matteoperini/NA_SEIR-EAKF_forecast), a continental-scale SEIR epidemic model with Ensemble Adjustment Kalman Filter (EAKF) data assimilation across 96 North American locations.
+A Claude-powered diagnostic agent for [`NA_SEIR-EAKF_forecast`](https://github.com/MatteoPS/NA_SEIR-EAKF_forecast), a continental-scale SEIR epidemic model with Ensemble Adjustment Kalman Filter (EAKF) data assimilation across 96 North American locations.
 
 ---
 
@@ -130,4 +130,4 @@ This is documented here rather than in code comments because it directly shapes 
 
 This repo contains no model code. It reads only the `.mat` output files that `NA_SEIR-EAKF_forecast` writes to `Model_Runs/`. Running this tool does not modify any parent pipeline output.
 
-Parent repo: [`NA_SEIR-EAKF_forecast`](https://github.com/matteoperini/NA_SEIR-EAKF_forecast) — see that repo for full pipeline documentation, MATLAB dependencies, and data sources.
+Parent repo: [`NA_SEIR-EAKF_forecast`](https://github.com/MatteoPS/NA_SEIR-EAKF_forecast) — see that repo for full pipeline documentation, MATLAB dependencies, and data sources.
