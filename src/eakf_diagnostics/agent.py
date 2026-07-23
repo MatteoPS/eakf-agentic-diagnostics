@@ -36,28 +36,34 @@ from .checks import CheckResult
 
 SYSTEM_PROMPT = """\
 You are a diagnostic assistant for an epidemiological forecasting pipeline \
-(a stochastic SEIR metapopulation model with an Ensemble Adjustment Kalman \
-Filter for data assimilation). You are given the results of deterministic \
-numeric checks that flagged a potential problem with the ESTIMATION PROCESS \
-of a specific run -- NOT whether the forecast was accurate, but whether the \
-ensemble behaved the way a healthy EAKF should (adequate spread, parameters \
-not pinned at bounds, well-calibrated uncertainty).
+(stochastic SEIR metapopulation model with EAKF data assimilation). You \
+investigate flagged ensemble-health anomalies — NOT forecast accuracy — \
+using data you fetch via tools before drawing conclusions.
 
-You have a tool available to pull additional detail from the run (specific \
-trajectory slices, per-location breakdowns, day-by-day values) if the \
-initial check summary isn't enough to form a view. Use it before concluding.
+Use fetch_more_detail to pull supporting evidence before writing your report. \
+Then write a concise structured report using EXACTLY this format:
 
-Your final output MUST include, for each flagged issue:
-- A plain-language description of what was observed
-- A confidence level (low/medium/high) in your explanation
-- At least one alternative explanation you considered and why you ranked it \
-lower (or why you could not rule it out)
-- What additional evidence (if it existed) would resolve the remaining \
-ambiguity
+## Flagged: [check_name]
+One sentence: what the check found (include the number and threshold).
 
-Do NOT present a single cause with unwarranted confidence. If the evidence \
-is genuinely ambiguous, say so explicitly rather than picking the most \
-plausible-sounding story.
+## Evidence gathered
+- [tool call]: one sentence on what it showed
+(2-4 bullets; omit section if no tool calls were needed)
+
+## Most likely explanation [Confidence: low / medium / high]
+2-3 sentences. State the mechanism and why the evidence supports it.
+
+## Alternatives considered
+- [Alternative]: one sentence on why ranked lower or could not be ruled out
+(2-3 bullets max)
+
+## What would resolve the ambiguity
+- [specific data or comparison that would confirm or reject the main explanation]
+(2-3 bullets max)
+
+Keep the total report under 350 words. Do not add sections. Do not expand \
+beyond this structure. If the evidence is genuinely ambiguous, say so in the \
+confidence field — do not pad the report to compensate.
 """
 
 # pin the exact model string rather than an alias -- don't want a model
@@ -220,16 +226,15 @@ def execute_tool_call(tool_name: str, tool_input: dict, context: RunContext) -> 
             post  = run.post_var_rec[:, loc_idx]
             valid = prior > 1e-12
             with np.errstate(invalid="ignore", divide="ignore"):
-                ratio = np.where(valid, post / prior, None)
+                ratio = np.where(valid, post / prior, np.nan)
+                mean_valid = float(np.nanmean(ratio))
             return json.dumps({
                 "field": field,
                 "location": run.location_name(loc_idx),
                 "location_idx": loc_idx,
-                "ratio_by_day": [float(r) if r is not None and not np.isnan(r) else None
-                                 for r in ratio],
+                "ratio_by_day": [float(r) if not np.isnan(r) else None for r in ratio],
                 "frac_valid_days": float(valid.mean()),
-                "mean_ratio_valid_days": float(np.nanmean(
-                    np.where(valid, post/prior, np.nan))),
+                "mean_ratio_valid_days": mean_valid,
             })
 
         elif field == "coverage_by_forecast_week":
@@ -296,7 +301,7 @@ def run_diagnostic_agent(
     for turn in range(max_turns):
         response = client.messages.create(
             model=MODEL_NAME,
-            max_tokens=2048*2,
+            max_tokens=1024,
             system=SYSTEM_PROMPT,
             tools=TOOLS,
             messages=messages,
