@@ -36,6 +36,8 @@ def main():
                          help="Just dump the file's HDF5 schema and exit (use this FIRST on a new file)")
     parser.add_argument("--skip-agent", action="store_true",
                          help="Run checks only, skip the LLM investigation step (no API cost)")
+    parser.add_argument("--output-dir", default="docs",
+                         help="Directory to write agent report markdown (default: docs/)")
     args = parser.parse_args()
 
     mat_path = Path(args.mat_path)
@@ -74,6 +76,19 @@ def main():
     print("="*70)
     if "report" in report:
         print(report["report"])
+        # Write clean markdown file
+        out_dir = Path(args.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{run_id}_report.md"
+        out_path.write_text(
+            f"# Diagnostic Report: {run_id}\n\n"
+            f"**Turns used:** {report.get('turns_used', '?')}  \n"
+            f"**Checks run:** {', '.join(r.check_name for r in results)}\n\n"
+            f"**Flagged:** {', '.join(r.check_name for r in flagged)}\n\n"
+            "---\n\n"
+            + report["report"]
+        )
+        print(f"\nReport saved to: {out_path}")
     else:
         print(json.dumps(report, indent=2, default=str))
     print("="*70)
