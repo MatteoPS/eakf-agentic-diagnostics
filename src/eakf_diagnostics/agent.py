@@ -17,10 +17,8 @@ Flow:
      -- this is enforced via the system prompt and the required output
      schema, not just requested informally.
 
-STATUS: fully wired. fetch_more_detail returns real data from ModelRun
-(extract.py). Model string verified as claude-sonnet-5 (July 2026).
-Prompt caching not yet added -- planned once batch-run workflows are
-benchmarked for cache hit rate.
+TODO: prompt caching -- worth adding once I'm running this over a batch
+of runs instead of one at a time.
 """
 
 from __future__ import annotations
@@ -62,9 +60,8 @@ is genuinely ambiguous, say so explicitly rather than picking the most \
 plausible-sounding story.
 """
 
-# Verified against Anthropic API docs (July 2026): current Sonnet-tier
-# model ID is claude-sonnet-5. Pin to this exact string in production
-# rather than an alias, so a future model swap doesn't happen silently.
+# pin the exact model string rather than an alias -- don't want a model
+# swap happening silently under a batch run
 MODEL_NAME = "claude-sonnet-5"
 
 

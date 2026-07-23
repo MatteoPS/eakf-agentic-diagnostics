@@ -3,28 +3,25 @@ checks.py
 
 Deterministic, non-LLM checks for EAKF ensemble PROCESS health.
 
-Scope reminder: these checks answer "did the estimation process behave
-correctly?" — NOT "did the model get the right answer?". They run on
-real-data runs (no ground truth needed) and operate on ensemble internals.
+These answer "did the estimation process behave correctly?" -- not "did
+the model get the right answer?". Run on real-data runs (no ground truth
+needed), operating on ensemble internals only.
 
-DESIGN HISTORY (see README Known limitations):
-    An initial parameter-bound clipping check was designed and built, but
-    found to be structurally uninformative for this pipeline: checkbound_para.m
-    resamples out-of-bound ensemble members to interior values rather than
-    clipping them to the boundary, so the fraction of values exactly at a
-    bound is always 0.0% by construction. The check was replaced with
-    check_kalman_update_activity(), which uses prior_var_rec / post_var_rec
-    fields already saved to the .mat file — no MATLAB code changes required.
+Note: originally had a parameter-bound clipping check here instead of
+check_kalman_update_activity(). Turned out checkbound_para.m resamples
+out-of-bound members to interior values rather than clipping to the
+boundary, so fraction-at-bound is always 0.0% no matter what -- useless.
+Swapped it for the Kalman activity check below, which uses
+prior_var_rec/post_var_rec already saved to the .mat file.
 
-Three checks, each returns a CheckResult rather than a bare bool, because the
-LLM agent downstream needs actual numbers, not just a verdict, to reason about
-severity and alternative explanations.
+Each check returns a CheckResult rather than a bare bool since the agent
+downstream needs actual numbers to reason about severity, not just a
+verdict.
 
-THRESHOLDS ARE PARTIALLY CALIBRATED. Collapse thresholds are informed by
-empirical spread ratios observed across 8 real-data runs (601-604 Poisson,
-701-704 deterministic dev) — range 10-26%. Kalman activity thresholds are
-still placeholders pending inspection of real prior_var_rec/post_var_rec
-values. See calibration notes per function.
+Collapse thresholds are informed by spread ratios across the 8 real-data
+runs I have (601-604 Poisson, 701-704 deterministic dev) -- range 10-26%.
+Kalman activity thresholds are still placeholders, pending a closer look
+at real prior_var_rec/post_var_rec values. Calibration notes per function.
 """
 
 from __future__ import annotations
@@ -74,11 +71,10 @@ def check_ensemble_spread_collapse(
         burn_in_days: days to skip at start (initial spread is wide by
             design; comparing against day 0 is not meaningful).
 
-    CALIBRATION: warn_ratio=0.10 is informed by real data — the lowest
-    collapse ratio observed across 8 runs was 10.6% (run 701, alpha).
-    fail_ratio=0.05 is a threshold below any observed run, set to catch
-    severe outliers not yet seen. These should be revisited if more runs
-    are added to the reference set.
+    warn_ratio=0.10 comes from real data -- lowest collapse ratio I've seen
+    across 8 runs was 10.6% (run 701, alpha). fail_ratio=0.05 is below
+    anything observed so far, just there to catch severe outliers. Revisit
+    both if the reference set grows.
     """
     n_days, n_ensemble, n_locations = param_trajectories.shape
     check_name = f"ensemble_spread_collapse_{param_label}"
@@ -152,12 +148,6 @@ def check_kalman_update_activity(
     at each assimilation step, using the ratio post_var / prior_var recorded
     per day per location.
 
-    WHY THIS REPLACES CLIPPING: checkbound_para.m resamples out-of-bound
-    ensemble members to interior values (not clips to boundary), making
-    fraction-at-exact-bound always 0 by construction. This check instead
-    measures how aggressively the filter reduces variance per step — a
-    mechanistically more informative signal that requires no MATLAB changes.
-
     Two failure modes:
       OVER-AGGRESSIVE (ratio << 1): filter collapses variance too fast at
           each step; ensemble loses diversity early, forecast uncertainty
@@ -177,13 +167,12 @@ def check_kalman_update_activity(
         under_updating_threshold:  mean ratio above this → WARN
         location_outlier_z: z-score above this → flag that location
 
-    CALIBRATION: thresholds are PLACEHOLDERS — prior_var_rec/post_var_rec
-    values have not yet been inspected across the reference run set (601-604,
-    701-704). These need to be replaced with empirically informed values once
-    check output on real data is reviewed.
+    Thresholds below are placeholders -- haven't looked closely at
+    prior_var_rec/post_var_rec across the reference set (601-604, 701-704)
+    yet. Swap in real numbers once that's done.
     """
-    # Mask days where prior variance is zero (no assimilation / no observation
-    # at that location — these are valid and should not be counted as failures)
+    # days with zero prior variance mean no assimilation happened there
+    # (no observation that day) -- not a failure, just skip them
     valid = prior_var_rec > 1e-12
     ratio = np.where(
         valid,
@@ -209,11 +198,9 @@ def check_kalman_update_activity(
     # Per-location outlier detection
     loc_mean  = float(np.nanmean(mean_ratio_per_loc))
     loc_std   = float(np.nanstd(mean_ratio_per_loc))
-    # Only flag a location as an outlier if it both:
-    #   (a) exceeds location_outlier_z standard deviations from the mean, AND
-    #   (b) deviates by at least 0.05 in absolute terms from the population mean.
-    # Guard (b) prevents spurious flags when all locations are nearly identical
-    # (tiny loc_std inflates z-scores even for trivially small differences).
+    # require both a z-score hit AND a real absolute gap (>0.05) -- otherwise
+    # when all locations are nearly identical, tiny loc_std blows up the
+    # z-scores and flags noise
     if loc_std > 1e-10:
         zscores = (mean_ratio_per_loc - loc_mean) / loc_std
         abs_dev = np.abs(mean_ratio_per_loc - loc_mean)
@@ -297,8 +284,8 @@ def check_coverage_miscalibration(
         nominal_coverage: target coverage level (0.95 for 95% PI).
         warn_delta / fail_delta: |observed - nominal| thresholds.
 
-    CALIBRATION: thresholds are placeholders — no Forecasts/ data has been
-    loaded yet to inform empirical values.
+    Thresholds are placeholders -- haven't loaded any Forecasts/ data yet
+    to pick real values.
     """
     delta     = abs(coverage_observed - nominal_coverage)
     direction = (
