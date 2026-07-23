@@ -299,7 +299,7 @@ def run_diagnostic_agent(
     for turn in range(max_turns):
         response = client.messages.create(
             model=MODEL_NAME,
-            max_tokens=2048,
+            max_tokens=2048*2,
             system=SYSTEM_PROMPT,
             tools=TOOLS,
             messages=messages,
