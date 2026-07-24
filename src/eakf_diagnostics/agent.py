@@ -256,6 +256,7 @@ def run_diagnostic_agent(
     run_id: str,
     model_run=None,
     max_turns: int = 8,
+    max_tokens: int = 1024,
     client: anthropic.Anthropic | None = None,
 ) -> dict:
     """
@@ -271,7 +272,11 @@ def run_diagnostic_agent(
             tool returns an error message (agent can still reason from
             the check summary alone).
         max_turns: maximum tool-use rounds before giving up
+        max_tokens: maximum tokens the model may generate per call
     """
+    if max_tokens < 1:
+        raise ValueError(f"max_tokens must be a positive integer, got {max_tokens}")
+
     if client is None:
         client = anthropic.Anthropic()
 
@@ -293,7 +298,12 @@ def run_diagnostic_agent(
             "content": (
                 f"Run {run_id} triggered the following deterministic checks:\n\n"
                 f"{check_summary}\n\n"
-                f"Investigate these findings and produce a diagnostic report."
+                f"Investigate these findings and produce a very concise diagnostic report.\n\n"
+                f"Format constraints:\n"
+                f"- No full sentences/prose paragraphs. Use fragments, bullets, or arrows (→).\n"
+                f"- Each bullet ≤15 words.\n"
+                f"- Structure causal chains as: cause → mechanism → effect\n"
+                f"- Skip restating context already in the check summary above."
             ),
         }
     ]
@@ -301,7 +311,7 @@ def run_diagnostic_agent(
     for turn in range(max_turns):
         response = client.messages.create(
             model=MODEL_NAME,
-            max_tokens=1024,
+            max_tokens=max_tokens,
             system=SYSTEM_PROMPT,
             tools=TOOLS,
             messages=messages,
@@ -314,12 +324,20 @@ def run_diagnostic_agent(
             final_text = "".join(
                 block.text for block in response.content if block.type == "text"
             )
-            return {
+            result = {
                 "status": "complete",
                 "run_id": run_id,
                 "turns_used": turn + 1,
                 "report": final_text,
             }
+            if response.stop_reason == "max_tokens":
+                # Output was cut off mid-generation, not a genuine final answer
+                result["status"] = "truncated"
+                result["note"] = (
+                    f"Response hit the max_tokens limit ({max_tokens}) before finishing. "
+                    "Consider raising --max-tokens; the report above may be incomplete."
+                )
+            return result
 
         # Handle tool call(s)
         tool_results = []

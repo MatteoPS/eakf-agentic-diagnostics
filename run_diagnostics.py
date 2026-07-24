@@ -38,9 +38,15 @@ def main():
                          help="Run checks only, skip the LLM investigation step (no API cost)")
     parser.add_argument("--output-dir", default="docs",
                          help="Directory to write agent report markdown (default: docs/)")
+    parser.add_argument("--max-tokens", type=int, default=1024,
+                         help="Maximum tokens used for each individual LLM call (default: 1024)")
     args = parser.parse_args()
 
+    if args.max_tokens < 1:
+        parser.error("--max-tokens must be a positive integer")
+
     mat_path = Path(args.mat_path)
+
 
     if args.inspect_only:
         schema = inspect_file_schema(mat_path)
@@ -68,7 +74,7 @@ def main():
 
     print(f"\n{len(flagged)} issue(s) flagged. Invoking diagnostic agent...")
     run_id = run.run_path.stem
-    report = run_diagnostic_agent(results, run_id=run_id, model_run=run)
+    report = run_diagnostic_agent(results, run_id=run_id, model_run=run, max_tokens=args.max_tokens)
 
     print("\n" + "="*70)
     print(f"DIAGNOSTIC REPORT — {report.get('run_id', run_id)}")
