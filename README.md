@@ -117,7 +117,7 @@ This is documented here rather than in code comments because it directly shapes 
 **Validated:**
 - Extraction layer runs without error on 8 real-data runs (601–604 Poisson production, 701–704 deterministic dev). Schema confirmed against the 601 file via `inspect_file_schema()`.
 - `check_ensemble_spread_collapse` thresholds informed by empirical range across these 8 runs: 10–26% late/early spread ratio. Run 702 (location 30, alpha, 8.1%) is the only outlier below the `warn_ratio=0.10` threshold.
-- `check_kalman_update_activity` flagged four small Canadian territories (Northwest Territories, Nunavut, PEI, Yukon) in run 602 with update ratios 2.5× the cross-location mean. The agent investigated, cross-checked against collapse ratios at the same locations, and produced a medium-confidence explanation — see [`docs/0722_602_real_f_n_pois_report.md`](docs/0722_602_real_f_n_pois_report.md).
+- `check_kalman_update_activity` flagged four small Canadian territories (Northwest Territories, Nunavut, PEI, Yukon) in run 602 with update ratios 2.5× the cross-location mean. The agent investigated, cross-checked the day-by-day ratio timeseries at the worst location, and produced a medium-confidence explanation — see [`docs/0722_602_real_f_n_pois_report.md`](docs/0722_602_real_f_n_pois_report.md).
 
 **Not yet validated:**
 - `check_kalman_update_activity` thresholds are placeholders calibrated to not fire on healthy runs, but the failure thresholds have not been confirmed against a known-pathological run.
