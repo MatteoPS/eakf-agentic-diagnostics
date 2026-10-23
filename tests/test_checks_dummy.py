@@ -112,6 +112,67 @@ def test_coverage_bad_is_flagged():
     assert result.severity == Severity.FAIL
 
 
+
+# ── Edge cases and severity bands ──────────────────────────────────────────
+
+def test_collapse_run_too_short():
+    result = check_ensemble_spread_collapse(rng.normal(size=(4, N_ENS, 3)), burn_in_days=5)
+    assert result.severity == Severity.WARN
+    assert "too short" in result.summary
+
+
+def test_collapse_zero_early_spread():
+    """Every member identical -> ratio undefined everywhere, not a crash."""
+    result = check_ensemble_spread_collapse(np.ones((30, N_ENS, 3)))
+    assert result.severity == Severity.WARN
+    assert result.details["worst_ratio"] is None
+
+
+def test_collapse_warn_band():
+    """Late spread ~7% of early: between fail_ratio (5%) and warn_ratio (10%)."""
+    traj = rng.normal(0, 1, size=(30, N_ENS, 3))
+    traj[-5:] *= 0.07
+    result = check_ensemble_spread_collapse(traj)
+    assert result.severity == Severity.WARN
+    assert 0.05 < result.details["worst_ratio"] < 0.10
+
+
+def test_kalman_no_valid_days():
+    prior = np.zeros((N_DAYS, N_LOC))
+    result = check_kalman_update_activity(prior, prior)
+    assert result.severity == Severity.WARN
+    assert result.details["frac_valid_days"] == 0.0
+
+
+def test_kalman_over_aggressive_warn_band():
+    prior = np.ones((N_DAYS, N_LOC))
+    result = check_kalman_update_activity(prior, prior * 0.07)
+    assert result.severity == Severity.WARN
+    assert "Possibly over-aggressive" in result.summary
+
+
+def test_kalman_single_location_outlier():
+    prior = np.ones((N_DAYS, N_LOC))
+    post = prior * 0.6
+    post[:, 7] = 0.9
+    result = check_kalman_update_activity(prior, post)
+    assert result.severity == Severity.WARN
+    assert result.details["outlier_locations"] == [7]
+
+
+def test_kalman_identical_locations_no_outliers():
+    """Zero spread across locations must not blow up the z-scores."""
+    prior = np.ones((N_DAYS, N_LOC))
+    result = check_kalman_update_activity(prior, prior * 0.6)
+    assert result.severity == Severity.OK
+    assert result.details["outlier_locations"] == []
+
+
+def test_coverage_warn_band():
+    result = check_coverage_miscalibration(0.83)
+    assert result.severity == Severity.WARN
+    assert "over-confident" in result.summary
+
 if __name__ == "__main__":
     test_collapse_healthy_is_ok()
     test_collapse_collapsing_is_flagged()

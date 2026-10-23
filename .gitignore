@@ -7,3 +7,5 @@ sample_data/*.mat
 dist/
 build/
 .ruff_cache/
+.coverage
+coverage.xml

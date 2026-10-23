@@ -166,3 +166,39 @@ def test_unknown_field_and_tool():
     ctx = RunContext(run_id="test", model_run=make_run())
     assert "error" in json.loads(execute_tool_call("fetch_more_detail", {"field": "nope"}, ctx))
     assert "error" in json.loads(execute_tool_call("other_tool", {}, ctx))
+
+
+@pytest.mark.parametrize("field", ["alpha_trajectory_full", "beta_trajectory_full"])
+def test_trajectory_fields(field):
+    ctx = RunContext(run_id="test", model_run=make_run())
+
+    summary = json.loads(execute_tool_call("fetch_more_detail", {"field": field}, ctx))
+    assert len(summary["per_location_early_mean"]) == N_LOC
+    assert len(summary["per_location_late_mean"]) == N_LOC
+
+    one = json.loads(execute_tool_call("fetch_more_detail", {"field": field, "location_idx": 1}, ctx))
+    assert one["location"] == "location 1"
+    assert len(one["ensemble_mean_by_day"]) == N_DAYS
+    assert len(one["ensemble_std_by_day"]) == N_DAYS
+
+
+def test_coverage_field_not_available():
+    ctx = RunContext(run_id="test", model_run=make_run())
+    out = json.loads(execute_tool_call("fetch_more_detail", {"field": "coverage_by_forecast_week"}, ctx))
+    assert out["status"] == "not_available"
+
+
+def test_tool_error_is_returned_not_raised():
+    """A failure inside the executor must reach the agent as JSON, not crash the loop."""
+    ctx = RunContext(run_id="test", model_run=None)
+    out = json.loads(execute_tool_call("fetch_more_detail", {"field": "per_location_kalman_ratios"}, ctx))
+    assert out["field"] == "per_location_kalman_ratios"
+    assert "error" in out
+
+
+def test_default_client_is_created(monkeypatch):
+    fake = FakeClient([response("end_turn", text_block("done"))])
+    monkeypatch.setattr("eakf_diagnostics.agent.anthropic.Anthropic", lambda: fake)
+    result = run_diagnostic_agent(FLAGGED, run_id="test", model_run=make_run())
+    assert result["status"] == "complete"
+    assert len(fake.calls) == 1

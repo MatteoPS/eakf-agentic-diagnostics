@@ -1,6 +1,7 @@
 # eakf-agentic-diagnostics
 
 [![CI](https://github.com/MatteoPS/eakf-agentic-diagnostics/actions/workflows/ci.yml/badge.svg)](https://github.com/MatteoPS/eakf-agentic-diagnostics/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/MatteoPS/eakf-agentic-diagnostics/graph/badge.svg)](https://codecov.io/gh/MatteoPS/eakf-agentic-diagnostics)
 [![Release](https://img.shields.io/github/v/release/MatteoPS/eakf-agentic-diagnostics)](https://github.com/MatteoPS/eakf-agentic-diagnostics/releases)
 [![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)

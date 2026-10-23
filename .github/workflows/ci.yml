@@ -23,4 +23,11 @@ jobs:
       - name: Lint
         run: ruff check .
       - name: Test
-        run: pytest -v
+        run: pytest -v --cov=eakf_diagnostics --cov-report=xml
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          fail_ci_if_error: false
