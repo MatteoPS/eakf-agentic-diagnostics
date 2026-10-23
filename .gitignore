@@ -4,3 +4,6 @@ __pycache__/
 *.egg-info/
 sample_data/*.mat
 .pytest_cache/
+dist/
+build/
+.ruff_cache/

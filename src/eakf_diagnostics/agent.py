@@ -24,9 +24,7 @@ of runs instead of one at a time.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
-from typing import Any
 
 import anthropic
 import numpy as np
@@ -171,14 +169,6 @@ def execute_tool_call(tool_name: str, tool_input: dict, context: RunContext) -> 
         elif field == "per_location_collapse_ratios":
             # Recompute collapse ratios for all locations, with names
             burn = 5
-            for param, traj in [("alpha", run.alpha_trajectories),
-                                 ("beta",  run.beta_trajectories)]:
-                std = traj.std(axis=1)  # (n_days, n_locations)
-                early = std[burn:burn + 5].mean(axis=0)
-                late  = std[-5:].mean(axis=0)
-                with np.errstate(invalid="ignore", divide="ignore"):
-                    ratio = np.where(early > 1e-10, late / early, np.nan)
-            # Return both alpha and beta
             alpha_std = run.alpha_trajectories.std(axis=1)
             beta_std  = run.beta_trajectories.std(axis=1)
             alpha_ratio = np.where(
@@ -251,6 +241,18 @@ def execute_tool_call(tool_name: str, tool_input: dict, context: RunContext) -> 
         return json.dumps({"error": str(e), "field": field})
 
 
+def _serialize_messages(messages: list[dict]) -> list[dict]:
+    """Message history as plain JSON-able dicts. SDK content blocks are
+    pydantic models, so dump them; tool_result dicts pass through as-is."""
+    out = []
+    for msg in messages:
+        content = msg["content"]
+        if isinstance(content, list):
+            content = [b.model_dump() if hasattr(b, "model_dump") else b for b in content]
+        out.append({"role": msg["role"], "content": content})
+    return out
+
+
 def run_diagnostic_agent(
     check_results: list[CheckResult],
     run_id: str,
@@ -273,6 +275,9 @@ def run_diagnostic_agent(
             the check summary alone).
         max_turns: maximum tool-use rounds before giving up
         max_tokens: maximum tokens the model may generate per call
+
+    The returned dict includes "transcript": the full message history
+    (prompts, tool calls, tool results, final answer) for auditing.
     """
     if max_tokens < 1:
         raise ValueError(f"max_tokens must be a positive integer, got {max_tokens}")
@@ -329,6 +334,7 @@ def run_diagnostic_agent(
                 "run_id": run_id,
                 "turns_used": turn + 1,
                 "report": final_text,
+                "transcript": _serialize_messages(messages),
             }
             if response.stop_reason == "max_tokens":
                 # Output was cut off mid-generation, not a genuine final answer
@@ -358,4 +364,5 @@ def run_diagnostic_agent(
         "turns_used": max_turns,
         "note": "Agent did not reach a final answer within max_turns. "
                 "Consider raising max_turns or reviewing the transcript.",
+        "transcript": _serialize_messages(messages),
     }
