@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eakf-agentic-diagnostics"
+version = "0.1.0"
+description = "Claude-powered diagnostic agent for EAKF ensemble health in a SEIR epidemic forecasting pipeline"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Matteo Perini" }]
+requires-python = ">=3.10"
+dependencies = [
+    "h5py>=3.10",
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "anthropic>=0.40",
+    "python-dotenv>=1.0",
+]
+keywords = ["llm-agents", "claude", "tool-use", "kalman-filter", "data-assimilation", "epidemiology"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.urls]
+Repository = "https://github.com/MatteoPS/eakf-agentic-diagnostics"
+"Parent model" = "https://github.com/MatteoPS/NA_SEIR-EAKF_forecast"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]

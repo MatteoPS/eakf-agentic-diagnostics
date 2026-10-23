@@ -10,10 +10,6 @@ still placeholders for the Kalman activity check.
 """
 
 import numpy as np
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from eakf_diagnostics.checks import (
     check_ensemble_spread_collapse,

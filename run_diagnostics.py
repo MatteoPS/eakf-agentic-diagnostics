@@ -24,7 +24,7 @@ from eakf_diagnostics.agent import run_diagnostic_agent
 from dotenv import load_dotenv
 load_dotenv()
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="Run EAKF ensemble process-health diagnostics.")
     parser.add_argument("mat_path", help="Path to a Model_Runs/*.mat file")
     parser.add_argument("--statecodes", default=None,
@@ -40,6 +40,9 @@ def main():
                          help="Directory to write agent report markdown (default: docs/)")
     parser.add_argument("--max-tokens", type=int, default=1024,
                          help="Maximum tokens used for each individual LLM call (default: 1024)")
+    parser.add_argument("--fail-on", choices=["never", "warn", "fail"], default="never",
+                        help="Exit with status 1 if any check reaches this severity "
+                             "(default: never). Useful for gating batch pipelines.")
     args = parser.parse_args()
 
     if args.max_tokens < 1:
@@ -51,7 +54,7 @@ def main():
     if args.inspect_only:
         schema = inspect_file_schema(mat_path)
         print(json.dumps(schema, indent=2, default=str))
-        return
+        return 0
 
     run = load_model_run(mat_path, statecodes_path=args.statecodes)
     print(f"Loaded run: {run.run_path.name}")
@@ -64,17 +67,27 @@ def main():
         print(f"[{r.severity.value.upper():5s}] {r.check_name}: {r.summary}")
 
     flagged = [r for r in results if r.severity != Severity.OK]
+    fail_levels = {"never": set(), "warn": {Severity.WARN, Severity.FAIL}, "fail": {Severity.FAIL}}
+    exit_code = 1 if any(r.severity in fail_levels[args.fail_on] for r in flagged) else 0
+
     if not flagged:
         print("\nNo issues flagged. Clean run -- agent not invoked (saves API cost).")
-        return
+        return exit_code
 
     if args.skip_agent:
         print(f"\n{len(flagged)} issue(s) flagged. Skipping agent (--skip-agent set).")
-        return
+        return exit_code
 
     print(f"\n{len(flagged)} issue(s) flagged. Invoking diagnostic agent...")
     run_id = run.run_path.stem
     report = run_diagnostic_agent(results, run_id=run_id, model_run=run, max_tokens=args.max_tokens)
+
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if "transcript" in report:
+        transcript_path = out_dir / f"{run_id}_transcript.json"
+        transcript_path.write_text(json.dumps(report["transcript"], indent=2, default=str))
+        print(f"Agent transcript saved to: {transcript_path}")
 
     print("\n" + "="*70)
     print(f"DIAGNOSTIC REPORT — {report.get('run_id', run_id)}")
@@ -83,8 +96,6 @@ def main():
     if "report" in report:
         print(report["report"])
         # Write clean markdown file
-        out_dir = Path(args.output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{run_id}_report.md"
         out_path.write_text(
             f"# Diagnostic Report: {run_id}\n\n"
@@ -96,9 +107,10 @@ def main():
         )
         print(f"\nReport saved to: {out_path}")
     else:
-        print(json.dumps(report, indent=2, default=str))
+        print(json.dumps({k: v for k, v in report.items() if k != "transcript"}, indent=2, default=str))
     print("="*70)
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
